@@ -372,14 +372,22 @@ const govosAdapter = {
       }
     };
 
+    // React re-renders the action bar after the document data loads (and on
+    // cart/checkout state changes), which throws away anything we appended.
+    // Watch the whole document so we can re-inject whenever our button is
+    // gone; evaluate() is idempotent, so extra calls are cheap no-ops.
+    let scheduled = false;
     new MutationObserver(() => {
-      evaluate();
-    }).observe(
-      document.querySelector("title"), {
-        subtree: true,
-        childList: true
-      }
-    );
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        evaluate();
+      });
+    }).observe(document.documentElement, {
+      subtree: true,
+      childList: true
+    });
 
     evaluate();
   }
