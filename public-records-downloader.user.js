@@ -57,6 +57,10 @@ async function compilePdf(imageUrls, fileName, { onProgress, greyscale = true, j
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const maxRetries = 3;
+  // The image servers occasionally accept a connection and then never respond.
+  // Without a timeout that stalls the whole compile; aborting turns a hang into
+  // a failed attempt so the retry/back-off loop below can recover.
+  const fetchTimeoutMs = 30000;
 
   for (let i = 0; i < imageUrls.length; i++) {
     if (onProgress) onProgress(i + 1, imageUrls.length);
@@ -65,14 +69,21 @@ async function compilePdf(imageUrls, fileName, { onProgress, greyscale = true, j
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log("Fetching page " + (i + 1) + (attempt > 1 ? " (attempt " + attempt + ")" : "") + "...");
-        const response = await fetch(imageUrls[i]);
-        if (response.ok) {
-          blob = await response.blob();
-          break;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+        try {
+          const response = await fetch(imageUrls[i], { signal: controller.signal });
+          if (response.ok) {
+            blob = await response.blob();
+            break;
+          }
+          console.warn("Page " + (i + 1) + " returned " + response.status + (attempt < maxRetries ? ", retrying..." : ""));
+        } finally {
+          clearTimeout(timer);
         }
-        console.warn("Page " + (i + 1) + " returned " + response.status + (attempt < maxRetries ? ", retrying..." : ""));
       } catch (err) {
-        console.warn("Page " + (i + 1) + " fetch error: " + err.message + (attempt < maxRetries ? ", retrying..." : ""));
+        const reason = err.name === 'AbortError' ? "timed out after " + (fetchTimeoutMs / 1000) + "s" : err.message;
+        console.warn("Page " + (i + 1) + " fetch error: " + reason + (attempt < maxRetries ? ", retrying..." : ""));
       }
       if (attempt < maxRetries) await new Promise(r => setTimeout(r, 2000 * attempt));
     }
