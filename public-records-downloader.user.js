@@ -353,7 +353,15 @@ const govosAdapter = {
         }
       });
 
-      const buttonsMenu = document.querySelector("nav#primary div");
+      // The action bar can contain more than one <div>: documents that belong
+      // to a book get a "Previous in Book / Next in Book" grid ahead of the
+      // Add to Cart group. Target the group that actually holds the action
+      // buttons rather than whichever <div> happens to come first.
+      const menuDivs = [...document.querySelectorAll("nav#primary > div")];
+      const buttonsMenu =
+        menuDivs.find(d => [...d.querySelectorAll("button")].some(b => /add to cart/i.test(b.textContent))) ||
+        menuDivs.find(d => !d.classList.contains("bookNavContainer")) ||
+        null;
       if (buttonsMenu && !downloadButton?.isConnected) {
         parseDocumentInfo();
 
