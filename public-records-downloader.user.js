@@ -10,8 +10,8 @@
 // @run-at        document-end
 // @require       https://unpkg.com/jspdf@4.2.1/dist/jspdf.umd.min.js
 // @icon          https://eddy.nm.publicsearch.us/img/favicon-32x32.png
-// @updateURL     https://raw.githubusercontent.com/rplanier/public-records-downloader/master/public-records-downloader.user.js
-// @downloadURL   https://raw.githubusercontent.com/rplanier/public-records-downloader/master/public-records-downloader.user.js
+// @updateURL     https://raw.githubusercontent.com/rplanier/public-records-downloader/main/public-records-downloader.user.js
+// @downloadURL   https://raw.githubusercontent.com/rplanier/public-records-downloader/main/public-records-downloader.user.js
 // @supportURL    https://github.com/rplanier/public-records-downloader/issues
 // ==/UserScript==
 

@@ -16,7 +16,7 @@ Currently supported platforms:
 ## Installation Instructions
 
 1. Install a userscript browser extension like [Violentmonkey](https://violentmonkey.github.io/) (recommended) or [Tampermonkey](https://www.tampermonkey.net/).
-2. Open the [latest version](https://raw.githubusercontent.com/rplanier/public-records-downloader/master/public-records-downloader.user.js) of this userscript in your browser. Your userscript extension should prompt you to install it.
+2. Open the [latest version](https://raw.githubusercontent.com/rplanier/public-records-downloader/main/public-records-downloader.user.js) of this userscript in your browser. Your userscript extension should prompt you to install it.
 
 > [!CAUTION]
 > Userscript extensions allow installed scripts to execute JavaScript on websites matching the configured URL patterns. <ins>Only install userscripts from trusted sources.</ins>
