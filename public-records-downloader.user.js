@@ -4,7 +4,7 @@
 // @namespace     https://www.github.com/rplanier
 // @source        https://www.github.com/rplanier/public-records-downloader
 // @description   Adds download buttons, instrument search, and UI improvements to public records sites. Compiles document page images into single PDFs. Supports GovOS (publicsearch.us) and uslandrecords.com.
-// @version       0.3.1
+// @version       0.3.2
 // @match         *://*.publicsearch.us/*
 // @match         *://*.uslandrecords.com/*
 // @run-at        document-end
