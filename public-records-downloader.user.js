@@ -255,8 +255,8 @@ const govosAdapter = {
       }
     };
 
-    const addDownloadButton = async (parent) => {
-      const buttonClass = parent.lastChild.className;
+    const addDownloadButton = async (bar) => {
+      const buttonClass = bar.buttonClass;
 
       downloadButton = document.createElement("button");
       downloadButton.innerHTML = ICON_DOWNLOAD + " Download";
@@ -277,11 +277,11 @@ const govosAdapter = {
         });
       };
 
-      parent.appendChild(downloadButton);
+      bar.append(downloadButton);
     };
 
-    const addSearchForm = async (parent) => {
-      const buttonClass = parent.lastChild.className;
+    const addSearchForm = async (bar) => {
+      const buttonClass = bar.buttonClass;
 
       let form = document.createElement("form");
       form.style.display = "flex";
@@ -343,7 +343,64 @@ const govosAdapter = {
       form.appendChild(inputVolume);
       form.appendChild(inputPage);
       form.appendChild(searchButton);
-      parent.appendChild(form);
+      bar.append(form);
+    };
+
+    // Locate the action-button group inside nav#primary and describe how to
+    // add to it. GovOS has shipped several layouts for this bar:
+    //   - a plain <div> of <button>s (most counties)
+    //   - a "Previous in Book / Next in Book" <div> ahead of that group
+    //   - a <ul role="list"> with one <li> per button (newer builds)
+    // Rather than hard-code any of those, anchor on the Add to Cart button,
+    // which exists in every version, and mirror however it is wrapped.
+    const findActionBar = () => {
+      const nav = document.querySelector("nav#primary");
+      if (!nav) return null;
+
+      const buttons = [...nav.querySelectorAll("button")];
+      const anchor =
+        buttons.find(b => /add to cart/i.test(b.textContent)) ||
+        buttons.find(b => /property alert|express checkout/i.test(b.textContent));
+
+      let container = null;
+      let wrapInListItem = false;
+
+      if (anchor) {
+        if (anchor.parentElement?.tagName === "LI") {
+          container = anchor.parentElement.parentElement;
+          wrapInListItem = true;
+        } else {
+          container = anchor.parentElement;
+        }
+      } else {
+        // No recognisable button: fall back to the first non-book-nav <div>.
+        container = [...nav.querySelectorAll(":scope > div")]
+          .find(d => !d.classList.contains("bookNavContainer")) || null;
+      }
+
+      if (!container) return null;
+
+      // Copy the class of a sibling button so the injected buttons pick up
+      // the site's own styling. Prefer an enabled one; disabled variants
+      // (Express Checkout before sign-in) use a muted class.
+      const siblingButtons = [...container.querySelectorAll("button")];
+      const styleSource =
+        siblingButtons.find(b => !b.disabled) || siblingButtons[siblingButtons.length - 1] || anchor;
+      const buttonClass = styleSource?.className || "";
+
+      return {
+        container,
+        buttonClass,
+        append(el) {
+          if (wrapInListItem) {
+            const li = document.createElement("li");
+            li.appendChild(el);
+            container.appendChild(li);
+          } else {
+            container.appendChild(el);
+          }
+        }
+      };
     };
 
     const evaluate = async () => {
@@ -353,22 +410,14 @@ const govosAdapter = {
         }
       });
 
-      // The action bar can contain more than one <div>: documents that belong
-      // to a book get a "Previous in Book / Next in Book" grid ahead of the
-      // Add to Cart group. Target the group that actually holds the action
-      // buttons rather than whichever <div> happens to come first.
-      const menuDivs = [...document.querySelectorAll("nav#primary > div")];
-      const buttonsMenu =
-        menuDivs.find(d => [...d.querySelectorAll("button")].some(b => /add to cart/i.test(b.textContent))) ||
-        menuDivs.find(d => !d.classList.contains("bookNavContainer")) ||
-        null;
-      if (buttonsMenu && !downloadButton?.isConnected) {
+      const bar = findActionBar();
+      if (bar && !downloadButton?.isConnected) {
         parseDocumentInfo();
 
         console.log("Public Records Downloader is running (" + county + " County, " + state + ")");
 
-        await addDownloadButton(buttonsMenu);
-        await addSearchForm(buttonsMenu);
+        await addDownloadButton(bar);
+        await addSearchForm(bar);
       }
     };
 
