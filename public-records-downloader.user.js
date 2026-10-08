@@ -319,16 +319,22 @@ const govosAdapter = {
       form.onsubmit = function(e) {
         e.preventDefault();
         let today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-        let url = "https://" + domain + "/results?department=RP&recordedDateRange=16000101%2C" + today + "&searchType=advancedSearch";
 
         const instNo = inputInstNo.value.trim();
         const volume = inputVolume.value.trim();
         const page = inputPage.value.trim();
 
-        if (instNo) {
-          const instArray = JSON.stringify([instNo]);
-          url += "&documentNumberRange=" + encodeURIComponent(instArray);
-        }
+        // The results page now expects documentNumberRange to be present on
+        // every advanced search, even when no instrument number was given.
+        // Omitting it yields "No Results Found", so always send it, as an
+        // empty JSON array when unused. Mirrors the URL the site's own
+        // advanced search form generates.
+        const instArray = JSON.stringify(instNo ? [instNo] : []);
+        let url = "https://" + domain + "/results?department=RP" +
+          "&documentNumberRange=" + encodeURIComponent(instArray) +
+          "&recordedDateRange=18000101%2C" + today +
+          "&searchType=advancedSearch";
+
         if (volume) {
           url += "&volume=" + encodeURIComponent(volume);
         }
