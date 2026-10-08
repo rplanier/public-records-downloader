@@ -342,6 +342,16 @@ const govosAdapter = {
           url += "&page=" + encodeURIComponent(page);
         }
 
+        // The app persists its workspace tabs in sessionStorage and restores
+        // them on load. When the restored active workspace is a document tab,
+        // the /results route ignores the volume/page criteria in the URL and
+        // reports "No Results Found" for searches that succeed in a fresh
+        // tab. Dropping the saved workspace state before navigating makes
+        // the app treat this load like a fresh tab and honour the URL.
+        try {
+          sessionStorage.removeItem("ko-search:workspaces");
+        } catch (err) { /* storage unavailable; proceed anyway */ }
+
         window.location.href = url;
       };
 
