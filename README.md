@@ -5,6 +5,7 @@ Public Records Downloader is a userscript that improves the document preview exp
 Currently supported platforms:
 
 - **GovOS** — `*.publicsearch.us`
+- **CountyFusion** — `countyfusion*.govos.com`
 - **USLandRecords** — `i2j.uslandrecords.com` (and other subdomains)
 
 > [!IMPORTANT]
@@ -31,6 +32,14 @@ Currently supported platforms:
 4. Search results tables are automatically expanded to fill the available width.
 5. If the button or search form does not appear, refresh the page.
 6. Clicking Download prompts for a filename; the default is `[document-number]_V[volume] P[page]_[county] [state].pdf`.
+
+### CountyFusion (govos.com)
+
+1. Log in (guest access works where the county allows it), search for a document, and open it. Click the **image** icon in the document toolbar to show the page viewer.
+2. A green **download** icon is added to the right end of the viewer toolbar, after the zoom and rotate controls.
+3. Click it and **wait for the PDF to compile and automatically download**. Pages are fetched one at a time because the site serves them from a single session-bound image URL; the viewer is returned to the page you were on when the compile finishes.
+4. The default filename matches the GovOS pattern: `[reception-number]_V[book] P[page]_[county] [state].pdf`, read from the document details panel.
+5. The "Open Image Viewer in a New Window" pop-out also gets the download icon, but the details panel is not available there, so the default filename falls back to the reception number only.
 
 ### USLandRecords (uslandrecords.com)
 

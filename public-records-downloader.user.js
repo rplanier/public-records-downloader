@@ -3,10 +3,11 @@
 // @author        Preston Lanier (preston@lanier.email)
 // @namespace     https://www.github.com/rplanier
 // @source        https://www.github.com/rplanier/public-records-downloader
-// @description   Adds download buttons, instrument search, and UI improvements to public records sites. Compiles document page images into single PDFs. Supports GovOS (publicsearch.us) and uslandrecords.com.
+// @description   Adds download buttons, instrument search, and UI improvements to public records sites. Compiles document page images into single PDFs. Supports GovOS (publicsearch.us), CountyFusion (govos.com), and uslandrecords.com.
 // @version       0.3.4
 // @match         *://*.publicsearch.us/*
 // @match         *://*.uslandrecords.com/*
+// @match         *://*.govos.com/*
 // @run-at        document-end
 // @require       https://unpkg.com/jspdf@4.2.1/dist/jspdf.umd.min.js
 // @icon          https://eddy.nm.publicsearch.us/img/favicon-32x32.png
@@ -825,10 +826,188 @@ const uslandrecordsAdapter = {
 };
 
 // ============================================================
+// CountyFusion adapter (countyfusionNN.govos.com)
+// ============================================================
+//
+// CountyFusion is a frame-heavy Struts app. The document image viewer lives in
+// its own frame (search/InstrumentImageViewInternal.jsp), so this adapter only
+// activates inside that frame and no-ops everywhere else on the host.
+//
+// Page images are served statefully: the server session tracks the current
+// instrument (set when the document is opened) and the current page.
+//   GET /countyweb/imageViewer/getPage.do?pageNumber=N&instnum=<instId>...
+//     -> {"numberOfPages": T, "status": "success"}   (selects page N)
+//   GET /countyweb/viewImagePNG.do?instnum=<instId>&isPreview=false&ver=<nonce>
+//     -> PNG of whichever page was last selected
+// The instnum param is echoed but not honoured; the session decides. Pages
+// therefore have to be fetched strictly in sequence, which compilePdf supports
+// via per-page fetch functions.
+
+const countyfusionAdapter = {
+  match(hostname) {
+    return /\.govos\.com$/.test(hostname);
+  },
+
+  init() {
+    if (!/\/InstrumentImageView/i.test(window.location.pathname)) return;
+
+    const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const params = new URLSearchParams(window.location.search);
+    const instId = params.get('instId');
+    const instNum = (params.get('instNum') || '').trim();
+    if (!instId) return;
+
+    let downloadButton = null;
+    let downloadInProgress = false;
+
+    const getPageUrl = (n) =>
+      '/countyweb/imageViewer/getPage.do?addWatermarks=false&isPreview=false&instnum=' +
+      encodeURIComponent(instId) + '&pageNumber=' + n;
+
+    const imageUrl = () =>
+      '/countyweb/viewImagePNG.do?isPreview=false&instnum=' + encodeURIComponent(instId) +
+      '&ver=' + Date.now() + Math.floor(Math.random() * 1000);
+
+    // Select page n server-side. Resolves with the page count.
+    const selectPage = async (n) => {
+      const response = await fetchWithTimeout(getPageUrl(n), { credentials: 'include' });
+      if (!response.ok) throw new Error("getPage HTTP " + response.status);
+      const data = await response.json();
+      if (data.status !== 'success') throw new Error("getPage failed for page " + n);
+      return data.numberOfPages;
+    };
+
+    const fetchCurrentImage = async () => {
+      const response = await fetchWithTimeout(imageUrl(), { credentials: 'include' });
+      if (!response.ok) throw new Error("image HTTP " + response.status);
+      const type = response.headers.get('content-type') || '';
+      if (!type.startsWith('image/')) throw new Error("image endpoint returned " + (type || 'no content-type'));
+      return response.blob();
+    };
+
+    // Document details live in a sibling frame (docInfoFrame) rendered as
+    // label/value table rows. Returns {} when unavailable, e.g. in the
+    // pop-out viewer window, which has no parent frames.
+    const readDocDetails = () => {
+      const details = {};
+      let doc = null;
+      try { doc = window.parent?.frames?.['docInfoFrame']?.document; } catch (e) { /* cross-origin or absent */ }
+      if (!doc) return details;
+
+      const labels = { 'reception no': 'docNumber', 'instrument no': 'docNumber', 'document no': 'docNumber', 'book': 'book', 'page': 'page', 'volume': 'volume', 'doc description': 'typeDesc' };
+      for (const td of doc.querySelectorAll('td')) {
+        const label = td.textContent.trim().replace(/:$/, '').toLowerCase();
+        const key = labels[label];
+        if (!key || details[key]) continue;
+        const value = td.nextElementSibling?.textContent.trim();
+        if (value) details[key] = value;
+      }
+      return details;
+    };
+
+    // "LeaNM" (from the top window title "… LeaNM County" or a countyname=
+    // query param) -> { county: 'Lea', state: 'NM' }.
+    const parseCountyState = () => {
+      let raw = '';
+      try {
+        raw = new URLSearchParams(window.top.location.search).get('countyname') || '';
+        if (!raw) raw = (window.top.document.title.match(/(\S+)\s+County/i) || [])[1] || '';
+      } catch (e) { /* pop-out window or cross-origin */ }
+      const m = raw.match(/^(.*?)([A-Z]{2})$/);
+      if (!m) return { county: '', state: '' };
+      return { county: m[1].replace(/([A-Z])/g, ' $1').trim(), state: m[2] };
+    };
+
+    // Same shape as the other adapters: "<docNum>_V<book> P<page>_<County> <ST>.pdf"
+    const buildFilename = (details) => {
+      const parts = [];
+      const docNumber = details.docNumber || instNum;
+      if (docNumber) parts.push(docNumber);
+      if (details.book && details.page) {
+        const vol = String(parseInt(details.book, 10) || details.book);
+        parts.push('V' + vol + ' P' + details.page);
+      }
+      const { county, state } = parseCountyState();
+      if (county && state) parts.push(county + ' ' + state);
+      return (parts.length ? parts.join('_') : 'document') + '.pdf';
+    };
+
+    const download = async () => {
+      if (downloadInProgress) return;
+      downloadInProgress = true;
+      const startPage = Number(w.pageNumber) || 1;
+
+      try {
+        showOverlay('Reading document...');
+        const total = await selectPage(1);
+        if (!total || total < 1) throw new Error("Could not determine page count");
+
+        const fileName = prompt("Save file as:", buildFilename(readDocDetails()));
+        if (!fileName) return;
+        const finalName = fileName.toLowerCase().endsWith('.pdf') ? fileName : fileName + '.pdf';
+
+        const pages = [];
+        for (let n = 1; n <= total; n++) {
+          pages.push(async () => {
+            await selectPage(n);
+            return fetchCurrentImage();
+          });
+        }
+
+        await compilePdf(pages, finalName, {
+          onProgress: (n, t) => showOverlay(`Compiling page ${n} of ${t}...`)
+        });
+      } catch (err) {
+        console.error('[countyfusion] download failed:', err);
+        alert('Download failed: ' + err.message);
+      } finally {
+        // Put the server-side page pointer back where the viewer thinks it is.
+        try { await selectPage(startPage); } catch (e) { /* best-effort */ }
+        hideOverlay();
+        downloadInProgress = false;
+      }
+    };
+
+    const tryInjectButton = () => {
+      if (downloadButton?.isConnected) return;
+      const toolbar = document.getElementById('toolBarButtons');
+      if (!toolbar) return;
+
+      // Mirror the rendered EasyUI linkbutton structure so the button matches
+      // the viewer's own toolbar (Font Awesome is already loaded by the page).
+      downloadButton = document.createElement('button');
+      downloadButton.type = 'button';
+      downloadButton.id = 'udd-download-btn';
+      downloadButton.title = 'Download a compiled PDF of all pages';
+      downloadButton.setAttribute('aria-label', 'Download PDF');
+      downloadButton.className = 'buttonsize l-btn l-btn-small';
+      downloadButton.style.background = '#43966a';
+      downloadButton.innerHTML =
+        '<span class="l-btn-left l-btn-icon-left">' +
+          '<span class="l-btn-text l-btn-empty">&nbsp;</span>' +
+          '<span class="l-btn-icon fa fa-download fa-lg" style="color: white;">&nbsp;</span>' +
+        '</span>';
+      downloadButton.onclick = (e) => { e.preventDefault(); download(); };
+
+      const spacer = document.createElement('span');
+      spacer.className = 'buttonspacer';
+      spacer.style.display = 'inline-block';
+
+      toolbar.appendChild(spacer);
+      toolbar.appendChild(downloadButton);
+      console.log('[countyfusion] Download button added');
+    };
+
+    tryInjectButton();
+    new MutationObserver(tryInjectButton).observe(document.documentElement, { childList: true, subtree: true });
+  }
+};
+
+// ============================================================
 // Dispatch
 // ============================================================
 
-const adapters = [govosAdapter, uslandrecordsAdapter];
+const adapters = [govosAdapter, uslandrecordsAdapter, countyfusionAdapter];
 const adapter = adapters.find(a => a.match(window.location.hostname));
 if (adapter) {
   adapter.init();
