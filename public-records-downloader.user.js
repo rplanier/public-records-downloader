@@ -63,6 +63,59 @@ async function fetchWithTimeout(url, init = {}) {
 }
 
 /**
+ * Save a Blob as a file, with a click-to-save fallback.
+ *
+ * The automatic save happens long after the user's click (after a prompt and
+ * many page fetches), and Firefox sometimes silently drops a download started
+ * that way. A script cannot tell whether the download happened, so a "Save
+ * PDF" link stays on screen: a real click on it always downloads.
+ **/
+function saveBlob(blob, fileName) {
+  document.getElementById('udd-save')?.remove();
+  const url = URL.createObjectURL(blob);
+  // Diagnostic: Firefox treats files a content-mode script creates as the
+  // extension's, not the page's, and may refuse to download them.
+  const mode = (typeof GM_info !== 'undefined' && GM_info.injectInto) || 'unknown';
+  console.log("Saving via " + url + " (inject mode: " + mode + ", frame: " + (window === window.top ? 'top' : 'child') + ")");
+
+  const auto = document.createElement('a');
+  auto.href = url;
+  auto.download = fileName;
+  auto.style.display = 'none';
+  document.body.appendChild(auto);
+  auto.click();
+  auto.remove();
+
+  const box = document.createElement('div');
+  box.id = 'udd-save';
+  box.style.cssText = 'position: fixed; top: 12px; right: 12px; background: #43966a; color: white; padding: 10px 16px; border-radius: 4px; z-index: 100001; font-family: sans-serif; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.25);';
+  box.append('No download? ');
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.textContent = 'Save PDF';
+  link.style.cssText = 'color: white; font-weight: bold; text-decoration: underline;';
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  close.title = 'Dismiss';
+  close.style.cssText = 'margin-left: 12px; background: none; border: none; color: white; font-size: 16px; cursor: pointer;';
+
+  // Keep the file in memory until the box goes away, then release it.
+  const dismiss = () => {
+    box.remove();
+    URL.revokeObjectURL(url);
+  };
+  close.onclick = dismiss;
+  setTimeout(() => { if (box.isConnected) dismiss(); }, 10 * 60 * 1000);
+
+  box.append(link, close);
+  document.body.appendChild(box);
+}
+
+/**
  * Fetch each page image, compress to JPEG, and compile into a single PDF.
  * Used by every site adapter once it has an ordered list of pages.
  *
@@ -90,6 +143,12 @@ async function compilePdf(pages, fileName, { onProgress, greyscale = true, jpegQ
     if (!response.ok) throw new Error("HTTP " + response.status);
     return response.blob();
   };
+
+  // One canvas reused for every page. Allocating a fresh 2000x3000+ canvas
+  // per page lets backing memory pile up faster than the browser reclaims
+  // it; Firefox in particular starts refusing 2D contexts once a tab holds
+  // too much canvas memory, which previously stalled the compile silently.
+  const canvas = document.createElement('canvas');
 
   for (let i = 0; i < pages.length; i++) {
     if (onProgress) onProgress(i + 1, pages.length);
@@ -123,14 +182,25 @@ async function compilePdf(pages, fileName, { onProgress, greyscale = true, jpegQ
         const img = new Image();
         img.onerror = () => reject(new Error("Failed to load image for page " + (i + 1)));
         img.onload = () => {
-          console.log("Page " + (i + 1) + " source: " + img.naturalWidth + "x" + img.naturalHeight);
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (greyscale) ctx.filter = 'grayscale(1)';
-          ctx.drawImage(img, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', jpegQuality));
+          // Anything thrown inside an onload handler would escape the promise
+          // and leave the await hanging forever, so convert every failure here
+          // into a rejection the caller can report.
+          try {
+            console.log("Page " + (i + 1) + " source: " + img.naturalWidth + "x" + img.naturalHeight);
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Browser refused a canvas context (out of canvas memory?)");
+            ctx.filter = greyscale ? 'grayscale(1)' : 'none';
+            ctx.drawImage(img, 0, 0);
+            const dataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
+            if (!dataUrl || !dataUrl.startsWith('data:image/jpeg')) throw new Error("Canvas produced no JPEG data (image too large?)");
+            resolve(dataUrl);
+          } catch (err) {
+            reject(err);
+          } finally {
+            img.src = '';
+          }
         };
         img.src = base64;
       });
@@ -144,7 +214,24 @@ async function compilePdf(pages, fileName, { onProgress, greyscale = true, jpegQ
     }
   }
 
-  pdf.save(fileName);
+  // Release the shared canvas's backing store before building the PDF.
+  canvas.width = 0;
+  canvas.height = 0;
+
+  // Building and saving are synchronous and can take a few seconds for long
+  // documents; log around them so a silent failure here is visible in the
+  // console rather than looking like a stall after the last page.
+  console.log("All " + pages.length + " pages fetched; building PDF...");
+  try {
+    const blob = pdf.output('blob');
+    console.log("PDF built (" + (blob.size / 1048576).toFixed(1) + " MB); saving as " + fileName);
+    saveBlob(blob, fileName);
+    console.log("PDF save triggered.");
+  } catch (error) {
+    console.error("Error saving PDF: " + error);
+    alert("Download failed while saving the PDF: " + error.message);
+    return false;
+  }
   return true;
 }
 
