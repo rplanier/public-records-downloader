@@ -42,47 +42,65 @@ function hideOverlay() {
   document.getElementById('udd-overlay')?.remove();
 }
 
+// The image servers occasionally accept a connection and then never respond.
+// Without a timeout that stalls the whole compile; aborting turns a hang into
+// a failed attempt so the retry/back-off loop in compilePdf can recover.
+const FETCH_TIMEOUT_MS = 30000;
+
 /**
- * Fetch each image URL, compress to JPEG, and compile into a single PDF.
- * Used by both site adapters once they have an ordered list of page URLs.
+ * fetch() with an abort timeout. Rejects with an AbortError when the request
+ * exceeds FETCH_TIMEOUT_MS.
+ **/
+async function fetchWithTimeout(url, init = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetch each page image, compress to JPEG, and compile into a single PDF.
+ * Used by every site adapter once it has an ordered list of pages.
+ *
+ * Each entry in `pages` is either:
+ *   - a URL string, fetched directly; or
+ *   - an async function returning a Blob, for sites whose image endpoint is
+ *     stateful (e.g., CountyFusion selects the page server-side before serving
+ *     a fixed image URL). Functions are invoked strictly in order.
  *
  * Options:
  *   onProgress(n, total) — called before each page fetch
  *   greyscale — convert to greyscale (default true; good for text-only docs)
  *   jpegQuality — 0..1 (default 0.85)
  **/
-async function compilePdf(imageUrls, fileName, { onProgress, greyscale = true, jpegQuality = 0.85 } = {}) {
+async function compilePdf(pages, fileName, { onProgress, greyscale = true, jpegQuality = 0.85 } = {}) {
   console.log("Compiling page preview images. Please wait...");
 
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const maxRetries = 3;
-  // The image servers occasionally accept a connection and then never respond.
-  // Without a timeout that stalls the whole compile; aborting turns a hang into
-  // a failed attempt so the retry/back-off loop below can recover.
-  const fetchTimeoutMs = 30000;
 
-  for (let i = 0; i < imageUrls.length; i++) {
-    if (onProgress) onProgress(i + 1, imageUrls.length);
+  const fetchPage = async (page) => {
+    if (typeof page === 'function') return page();
+    const response = await fetchWithTimeout(page);
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.blob();
+  };
+
+  for (let i = 0; i < pages.length; i++) {
+    if (onProgress) onProgress(i + 1, pages.length);
 
     let blob = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log("Fetching page " + (i + 1) + (attempt > 1 ? " (attempt " + attempt + ")" : "") + "...");
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
-        try {
-          const response = await fetch(imageUrls[i], { signal: controller.signal });
-          if (response.ok) {
-            blob = await response.blob();
-            break;
-          }
-          console.warn("Page " + (i + 1) + " returned " + response.status + (attempt < maxRetries ? ", retrying..." : ""));
-        } finally {
-          clearTimeout(timer);
-        }
+        blob = await fetchPage(pages[i]);
+        break;
       } catch (err) {
-        const reason = err.name === 'AbortError' ? "timed out after " + (fetchTimeoutMs / 1000) + "s" : err.message;
+        const reason = err.name === 'AbortError' ? "timed out after " + (FETCH_TIMEOUT_MS / 1000) + "s" : err.message;
         console.warn("Page " + (i + 1) + " fetch error: " + reason + (attempt < maxRetries ? ", retrying..." : ""));
       }
       if (attempt < maxRetries) await new Promise(r => setTimeout(r, 2000 * attempt));
